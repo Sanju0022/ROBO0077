@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<style>
+  :root { --bg:#0F1720; --panel:#16212C; --line:#243241; --ink:#E6EDF3; --muted:#8FA1B3;
+          --teal:#2EC4B6; --amber:#FFB347; --coral:#FF6B6B; --violet:#9D8DF1; --blue:#5AA9E6; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 "Inter","Segoe UI",system-ui,sans-serif; }
+  .wrap { display:grid; grid-template-columns:minmax(320px, 1fr) 300px; gap:14px; padding:6px; }
+  @media (max-width: 860px) { .wrap { grid-template-columns:1fr; } }
+  .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px; }
+  button, select { font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--line);
+                   border-radius:8px; padding:6px 11px; cursor:pointer; }
+  button:hover, select:hover { border-color:var(--teal); }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline:2px solid var(--teal); outline-offset:1px; }
+  .go { background:var(--teal); color:#08231F; border-color:var(--teal); font-weight:700; min-width:92px; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .seg button { border:none; border-radius:0; border-right:1px solid var(--line); }
+  .seg button:last-child { border-right:none; }
+  .seg button.on { background:#1F3A44; color:var(--teal); font-weight:600; }
+  label { color:var(--muted); display:inline-flex; align-items:center; gap:6px; }
+  input[type=range] { width:100px; accent-color:var(--teal); }
+  canvas { display:block; }
+  #room { border-radius:10px; touch-action:none; cursor:crosshair; }
+  #trace { border-radius:8px; background:var(--panel); border:1px solid var(--line); margin-top:8px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:10px; }
+  .card h5 { margin:0 0 6px; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+  #banner { font-weight:600; }
+  #banner.win { color:var(--teal); } #banner.fail { color:var(--coral); }
+  #move { font-size:19px; font-weight:700; }
+  .kv { display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; }
+  .kv div b { display:block; font-size:18px; }
+  .kv div span { color:var(--muted); font-size:12px; }
+  .bar { display:grid; grid-template-columns:46px 1fr 88px; gap:6px; align-items:center; font-size:12.5px; margin:4px 0; }
+  .track { height:8px; background:#0B1219; border-radius:4px; overflow:hidden; }
+  .fill { height:100%; border-radius:4px; }
+  .muted { color:var(--muted); font-size:12.5px; }
+  details summary { color:var(--muted); cursor:pointer; margin:6px 0; }
+  .key { display:flex; flex-wrap:wrap; gap:12px; font-size:12px; color:var(--muted); margin-top:6px; }
+  .key i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+</style></head>
+<body>
+<div class="wrap">
+  <div>
+    <div class="row">
+      <button id="go" class="go">▶ Run</button>
+      <button id="one">Step</button>
+      <button id="home">⟲ Restart</button>
+      <label>Speed <input id="speed" type="range" min="1" max="40" value="14"></label>
+      <select id="map" aria-label="Room"></select>
+    </div>
+    <div class="row">
+      <select id="brain" aria-label="Policy">
+        <option value="learned">Learned wall-follower (value iteration on the sensor MDP)</option>
+        <option value="grid">Goal seeker (grid MDP, 4 moves with slip)</option>
+        <option value="logged">Logged behaviour (what the real robot did)</option>
+        <option value="random">Random moves</option>
+      </select>
+    </div>
+    <div class="row">
+      <span class="muted">Click the room to place:</span>
+      <div class="seg">
+        <button data-tool="wall" class="on">▦ Walls</button>
+        <button data-tool="start">● Start</button>
+        <button data-tool="finish">⚑ Finish</button>
+      </div>
+      <button id="turnL" title="Rotate start heading 90° left">↺ heading</button>
+      <button id="turnR" title="Rotate start heading 90° right">↻ heading</button>
+    </div>
+    <canvas id="room"></canvas>
+    <canvas id="trace"></canvas>
+    <div class="key" id="key"></div>
+    <details>
+      <summary>Uncertainty, motion and view</summary>
+      <div class="row">
+        <label>Slip <input id="slip" type="range" min="0" max="40" value="0"><span id="slipTxt">0%</span></label>
+        <label>Sensor noise <input id="noise" type="range" min="0" max="25" value="0"><span id="noiseTxt">0 cm</span></label>
+        <label>Step <input id="stride" type="range" min="4" max="15" value="8"><span id="strideTxt">8 cm</span></label>
+      </div>
+      <div class="row">
+        <label>Slight turn <input id="soft" type="range" min="5" max="40" value="18"><span id="softTxt">18°</span></label>
+        <label>Sharp turn <input id="hard" type="range" min="20" max="90" value="45"><span id="hardTxt">45°</span></label>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="vRays" checked> sensor rays</label>
+        <label><input type="checkbox" id="vPath" checked> path</label>
+        <label><input type="checkbox" id="vPlan" checked> grid MDP values and plan</label>
+      </div>
+    </details>
+  </div>
+  <div>
+    <div class="card"><h5>Mission</h5><div id="banner">Place start and finish, then Run.</div></div>
+    <div class="card"><h5>Decision</h5><div id="move">–</div><div id="stateTxt" class="muted"></div></div>
+    <div class="card"><h5>Simplified distances</h5><div id="dists"></div></div>
+    <div class="card"><h5 id="qHead">Action values</h5><div id="qs"></div></div>
+    <div class="card"><h5>Run statistics</h5><div class="kv" id="kv"></div></div>
+  </div>
+</div>
+<script>
+(function () {
+"use strict";
+const D = /*__DATA__*/null;
+const MOVES = D.moves, MCOL = D.move_colors, ACOL = D.arc_colors;
+const COLS = 20, ROWS = 14, CELL = 0.30, BODY = 0.15, RANGE = 5.0;
+const MAX_LEARNED = 2000, MAX_GRID = 800, REACH = 0.35;
+const ARC = { SD_front: 0, SD_left: 90, SD_right: -90, SD_back: 180 };
+const GRID_MOVES = [[0, -1, "north", "↑"], [1, 0, "east", "→"], [0, 1, "south", "↓"], [-1, 0, "west", "←"]];
+const GRID_COL = "#5AA9E6", G_GAMMA = 0.98, G_BUMP = 3;
+const el = id => document.getElementById(id);
+
+let walls = [], pos = { x: 2.5, y: 11.5, a: 90 }, shown = { x: 2.5, y: 11.5 };
+let start = { c: 2, r: 11, a: 90 }, finish = { c: 16, r: 2 };
+let path = [], hist = [], stats = null, now = null, phase = "idle", playing = false, tool = "wall", flash = 0;
+let gv = null, gp = null, greach = null, px = 30, slip = 0, noise = 0;
+const motion = { stride: 0.08, soft: 18, hard: 45 };
+const room = el("room"), g = room.getContext("2d"), trace = el("trace"), tg = trace.getContext("2d");
+
+// ------------------------------------------------------------------ maps
+function box(c0, r0, c1, r1) { for (let r = r0; r < r1; r++) for (let c = c0; c < c1; c++) walls[r][c] = 1; }
+function empty() { walls = []; for (let r = 0; r < ROWS; r++) { const row = []; for (let c = 0; c < COLS; c++) row.push(r === 0 || c === 0 || r === ROWS - 1 || c === COLS - 1 ? 1 : 0); walls.push(row); } }
+const MAPS = {
+  "Open hall": { make: () => {}, s: [2, 11, 90], f: [17, 7] },
+  "Corridor loop": { make: () => box(6, 5, 14, 9), s: [2, 11, 90], f: [17, 7] },
+  "Office with desks": { make: () => { box(6, 5, 9, 7); box(11, 5, 14, 7); box(7, 8, 13, 9); }, s: [2, 11, 90], f: [17, 7] },
+  "Warehouse aisles": { make: () => { box(7, 5, 8, 10); box(12, 5, 13, 10); }, s: [2, 11, 90], f: [17, 7] },
+  "Maze (goal seeker)": { make: () => { box(4, 1, 5, 9); box(8, 5, 9, 13); box(12, 1, 13, 9); box(16, 5, 17, 13); }, s: [2, 11, 90], f: [18, 12] }
+};
+Object.keys(MAPS).forEach(k => { const o = document.createElement("option"); o.textContent = k; el("map").appendChild(o); });
+
+const inGrid = (c, r) => c >= 0 && r >= 0 && c < COLS && r < ROWS;
+const solid = (c, r) => !inGrid(c, r) || walls[r][c] === 1;
+const solidAt = (x, y) => solid(Math.floor(x), Math.floor(y));
+function collides(x, y) { const k = BODY / CELL; for (const dx of [-k, 0, k]) for (const dy of [-k, 0, k]) if (solidAt(x + dx, y + dy)) return true; return false; }
+
+// ------------------------------------------------------------------ grid MDP (4 moves, perpendicular slip)
+function gridStep(c, r, m) {
+  const nc = c + GRID_MOVES[m][0], nr = r + GRID_MOVES[m][1];
+  return solid(nc, nr) ? [c, r, true] : [nc, nr, false];
+}
+function outcomes(m) { return slip > 0 ? [[m, 1 - slip], [(m + 1) % 4, slip / 2], [(m + 3) % 4, slip / 2]] : [[m, 1]]; }
+function gridQ(c, r, m) {
+  let q = 0;
+  for (const [mm, p] of outcomes(m)) {
+    const [nc, nr, bump] = gridStep(c, r, mm);
+    const v = (nc === finish.c && nr === finish.r) ? 0 : gv[nr][nc];
+    q += p * (-1 - (bump ? G_BUMP : 0) + G_GAMMA * v);
+  }
+  return q;
+}
+function planGrid() {
+  greach = walls.map(row => row.map(() => false));
+  const queue = [[finish.c, finish.r]]; greach[finish.r][finish.c] = true;
+  while (queue.length) { const [c, r] = queue.shift(); for (let m = 0; m < 4; m++) { const [nc, nr, b] = gridStep(c, r, m); if (!b && !greach[nr][nc]) { greach[nr][nc] = true; queue.push([nc, nr]); } } }
+  gv = walls.map(row => row.map(() => 0)); gp = walls.map(row => row.map(() => -1));
+  for (let sweep = 0; sweep < 4000; sweep++) {
+    let change = 0;
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      if (walls[r][c] || !greach[r][c] || (c === finish.c && r === finish.r)) continue;
+      let best = -Infinity, arg = -1;
+      for (let m = 0; m < 4; m++) { const q = gridQ(c, r, m); if (q > best) { best = q; arg = m; } }
+      change = Math.max(change, Math.abs(best - gv[r][c])); gv[r][c] = best; gp[r][c] = arg;
+    }
+    if (change < 1e-6) break;
+  }
+}
+
+// ------------------------------------------------------------------ sensors and the learned policy
+function ray(x, y, deg) {
+  const a = deg * Math.PI / 180, dx = Math.cos(a) / CELL, dy = -Math.sin(a) / CELL;
+  for (let d = 0.015; d < RANGE; d += 0.015) if (solidAt(x + d * dx, y + d * dy)) return d;
+  return RANGE;
+}
+function gauss() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+function scan() {
+  const dist = {}, rays = {};
+  for (const k of Object.keys(ARC)) {
+    let low = RANGE; const list = [];
+    for (let o = -30; o <= 30; o += 5) { const deg = pos.a + ARC[k] + o, d = ray(pos.x, pos.y, deg); list.push([deg, d]); low = Math.min(low, d); }
+    if (noise > 0) low = Math.min(RANGE, Math.max(0.05, low + gauss() * noise));
+    dist[k] = low; rays[k] = list;
+  }
+  return { dist: dist, rays: rays };
+}
+function levelOf(k, v) { const cuts = D.cuts[k]; let i = 0; while (i < cuts.length && v >= cuts[i]) i++; return i; }
+function codeOf(lv) { return D.used.map((k, j) => D.short[k] + ":" + D.names[k][lv[j]]).join(" "); }
+function closestKnown(lv) {
+  let best = null, gap = Infinity;
+  D.states.forEach((s, i) => { const L = D.levels[i]; let d = 0; for (let j = 0; j < lv.length; j++) d += Math.abs(L[j] - lv[j]); if (d < gap) { gap = d; best = s; } });
+  return best;
+}
+function shapedReward(dd) {
+  const R = D.reward;
+  const follow = R.follow_gain * Math.exp(-0.5 * Math.pow((dd.SD_left - R.target_left) / Math.max(R.tolerance, 1e-3), 2));
+  const rf = Math.min(1, Math.max(0, (R.safe_front - dd.SD_front) / R.safe_front));
+  const rl = Math.min(1, Math.max(0, (R.safe_left - dd.SD_left) / R.safe_left));
+  return follow - R.crash_gain * (rf + rl);
+}
+const gridMode = () => el("brain").value === "grid";
+function think() {
+  const sc = scan();
+  if (gridMode()) {
+    const c = Math.floor(pos.x), r = Math.floor(pos.y), atF = c === finish.c && r === finish.r;
+    const m = (gp && inGrid(c, r) && !atF) ? gp[r][c] : -1;
+    now = { sc: sc, grid: true, c: c, r: r, m: m, label: "square (" + c + ", " + r + ")",
+            move: atF ? "At the finish" : (m >= 0 ? GRID_MOVES[m][3] + " go " + GRID_MOVES[m][2] : "No route") };
+    return;
+  }
+  const lv = D.used.map(k => levelOf(k, sc.dist[k]));
+  let label = codeOf(lv), guessed = false;
+  if (!(label in D.best)) { label = closestKnown(lv); guessed = true; }
+  const b = el("brain").value; let mv;
+  if (b === "logged") mv = D.logged[label];
+  else if (b === "random") { const opts = D.allowed[label]; mv = opts[Math.floor(Math.random() * opts.length)]; }
+  else mv = D.best[label];
+  now = { sc: sc, grid: false, label: label, guessed: guessed, move: mv };
+}
+
+// ------------------------------------------------------------------ stepping
+function fresh() { return { steps: 0, metres: 0, bumps: 0, slips: 0, reward: 0, holding: 0, guessed: 0 }; }
+const limit = () => gridMode() ? MAX_GRID : MAX_LEARNED;
+const over = () => phase === "won" || phase === "timeout" || phase === "blocked";
+const atFinish = () => Math.hypot(pos.x - finish.c - 0.5, pos.y - finish.r - 0.5) * CELL <= REACH;
+function end(p) { phase = p; setPlaying(false); panel(); }
+function advance() {
+  if (over()) return;
+  if (atFinish()) { end("won"); return; }
+  if (!now) think();
+  if (now.grid) {
+    if (now.m < 0) { end("blocked"); return; }
+    let m = now.m, slipped = false;
+    if (Math.random() < slip) { m = (m + (Math.random() < 0.5 ? 1 : 3)) % 4; slipped = true; }
+    const [nc, nr, bump] = gridStep(now.c, now.r, m);
+    pos.a = [90, 0, 270, 180][m];
+    if (bump) { stats.bumps++; flash = 10; } else { pos.x = nc + 0.5; pos.y = nr + 0.5; stats.metres += CELL; }
+    if (slipped) stats.slips++;
+    path.push([pos.x, pos.y, GRID_COL]);
+  } else {
+    let mv = now.move;
+    if (Math.random() < slip) { mv = MOVES[Math.floor(Math.random() * 4)]; stats.slips++; }
+    if (now.guessed) stats.guessed++;
+    let adv = motion.stride;
+    if (mv === "Slight-Right-Turn") pos.a -= motion.soft;
+    else if (mv === "Sharp-Right-Turn") { pos.a -= motion.hard; adv *= 0.25; }
+    else if (mv === "Slight-Left-Turn") pos.a += motion.soft;
+    pos.a = ((pos.a % 360) + 360) % 360;
+    const rad = pos.a * Math.PI / 180, nx = pos.x + adv * Math.cos(rad) / CELL, ny = pos.y - adv * Math.sin(rad) / CELL;
+    if (collides(nx, ny)) { stats.bumps++; flash = 10; } else { pos.x = nx; pos.y = ny; stats.metres += adv; }
+    shown.x = pos.x; shown.y = pos.y;
+    path.push([pos.x, pos.y, MCOL[mv]]);
+  }
+  if (path.length > 4000) path.shift();
+  stats.steps++;
+  think();
+  const dd = now.sc.dist;
+  stats.reward += shapedReward(dd);
+  if (Math.abs(dd.SD_left - D.reward.target_left) <= D.reward.tolerance) stats.holding++;
+  hist.push([dd.SD_left, dd.SD_front]); if (hist.length > 240) hist.shift();
+  if (atFinish()) end("won");
+  else if (stats.steps >= limit()) end("timeout");
+  else phase = "running";
+}
+
+// ------------------------------------------------------------------ drawing
+function fit() {
+  const w = room.parentElement.clientWidth || 640;
+  px = Math.max(14, Math.floor(Math.min(w, 860) / COLS));
+  const dpr = window.devicePixelRatio || 1;
+  room.width = COLS * px * dpr; room.height = ROWS * px * dpr; room.style.width = COLS * px + "px"; room.style.height = ROWS * px + "px";
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  trace.width = COLS * px * dpr; trace.height = 90 * dpr; trace.style.width = COLS * px + "px"; trace.style.height = "90px";
+  tg.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+function draw() {
+  const W = COLS * px, H = ROWS * px;
+  g.fillStyle = "#101A24"; g.fillRect(0, 0, W, H);
+  const plan = gridMode() && el("vPlan").checked && gv;
+  let vlo = 0;
+  if (plan) for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (!walls[r][c] && greach[r][c]) vlo = Math.min(vlo, gv[r][c]);
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    if (walls[r][c]) { g.fillStyle = "#3A4B5C"; g.fillRect(c * px, r * px, px, px); g.fillStyle = "#4A5D70"; g.fillRect(c * px, r * px, px, 3); continue; }
+    if (plan) { g.fillStyle = greach[r][c] ? "rgba(90,169,230," + (0.05 + 0.35 * (vlo < 0 ? 1 - gv[r][c] / vlo : 0)).toFixed(3) + ")" : "rgba(255,107,107,0.10)"; g.fillRect(c * px, r * px, px, px); }
+  }
+  g.strokeStyle = "rgba(143,161,179,0.10)"; g.lineWidth = 1; g.beginPath();
+  for (let c = 0; c <= COLS; c++) { g.moveTo(c * px + 0.5, 0); g.lineTo(c * px + 0.5, H); }
+  for (let r = 0; r <= ROWS; r++) { g.moveTo(0, r * px + 0.5); g.lineTo(W, r * px + 0.5); }
+  g.stroke();
+  if (plan) {
+    if (px >= 20) {
+      g.fillStyle = "rgba(230,237,243,0.35)"; g.font = Math.round(px * 0.45) + "px system-ui"; g.textAlign = "center"; g.textBaseline = "middle";
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (!walls[r][c] && gp[r][c] >= 0) g.fillText(GRID_MOVES[gp[r][c]][3], (c + 0.5) * px, (r + 0.5) * px);
+    }
+    let c = Math.floor(pos.x), r = Math.floor(pos.y), n = 0;
+    if (inGrid(c, r) && greach[r][c]) {
+      g.setLineDash([5, 5]); g.strokeStyle = "#5AA9E6"; g.lineWidth = 2.5; g.beginPath(); g.moveTo((c + .5) * px, (r + .5) * px);
+      while (!(c === finish.c && r === finish.r) && n < 300) { const m = gp[r][c]; if (m < 0) break; const [nc, nr, b] = gridStep(c, r, m); if (b) break; c = nc; r = nr; n++; g.lineTo((c + .5) * px, (r + .5) * px); }
+      g.stroke(); g.setLineDash([]);
+    }
+  }
+  if (el("vPath").checked && path.length > 1) {
+    g.lineWidth = 2; g.lineCap = "round";
+    for (let i = 1; i < path.length; i++) { g.globalAlpha = 0.2 + 0.8 * i / path.length; g.strokeStyle = path[i][2]; g.beginPath(); g.moveTo(path[i - 1][0] * px, path[i - 1][1] * px); g.lineTo(path[i][0] * px, path[i][1] * px); g.stroke(); }
+    g.globalAlpha = 1;
+  }
+  // start pad
+  const sx = (start.c + .5) * px, sy = (start.r + .5) * px;
+  g.fillStyle = "rgba(46,196,182,0.18)"; g.strokeStyle = "#2EC4B6"; g.lineWidth = 2;
+  g.beginPath(); g.arc(sx, sy, px * 0.42, 0, 2 * Math.PI); g.fill(); g.stroke();
+  const sa = start.a * Math.PI / 180;
+  g.beginPath(); g.moveTo(sx + Math.cos(sa) * px * 0.42, sy - Math.sin(sa) * px * 0.42); g.lineTo(sx + Math.cos(sa) * px * 0.62, sy - Math.sin(sa) * px * 0.62); g.stroke();
+  // finish flag
+  const fx = finish.c * px, fy = finish.r * px;
+  g.fillStyle = "rgba(255,179,71,0.16)"; g.fillRect(fx, fy, px, px); g.strokeStyle = "#FFB347"; g.lineWidth = 2; g.strokeRect(fx + 1.5, fy + 1.5, px - 3, px - 3);
+  g.beginPath(); g.moveTo(fx + px * 0.3, fy + px * 0.85); g.lineTo(fx + px * 0.3, fy + px * 0.15); g.stroke();
+  g.fillStyle = "#FFB347"; g.beginPath(); g.moveTo(fx + px * 0.3, fy + px * 0.15); g.lineTo(fx + px * 0.8, fy + px * 0.3); g.lineTo(fx + px * 0.3, fy + px * 0.45); g.fill();
+  // rover
+  const ease = now && now.grid ? 0.3 : 1;
+  shown.x += (pos.x - shown.x) * ease; shown.y += (pos.y - shown.y) * ease;
+  const rx = shown.x * px, ry = shown.y * px;
+  if (now && el("vRays").checked && !plan) {
+    for (const k of Object.keys(ARC)) {
+      g.strokeStyle = ACOL[k]; g.lineWidth = 1;
+      now.sc.rays[k].forEach(([deg, d], i) => {
+        if (i % 3 !== 0) return;
+        const a = deg * Math.PI / 180; g.globalAlpha = 0.45;
+        g.beginPath(); g.moveTo(rx, ry); g.lineTo(rx + Math.cos(a) * d / CELL * px, ry - Math.sin(a) * d / CELL * px); g.stroke();
+      });
+      g.globalAlpha = 1;
+      const best = now.sc.rays[k].reduce((a, b) => (b[1] < a[1] ? b : a));
+      const a = best[0] * Math.PI / 180;
+      g.fillStyle = ACOL[k]; g.beginPath(); g.arc(rx + Math.cos(a) * best[1] / CELL * px, ry - Math.sin(a) * best[1] / CELL * px, 3.5, 0, 2 * Math.PI); g.fill();
+    }
+  }
+  const body = BODY / CELL * px, rad = pos.a * Math.PI / 180;
+  g.save(); g.translate(rx, ry); g.rotate(-rad);
+  if (flash > 0) { g.strokeStyle = "rgba(255,107,107," + flash / 10 + ")"; g.lineWidth = 3; g.beginPath(); g.arc(0, 0, body + 6, 0, 2 * Math.PI); g.stroke(); }
+  if (phase === "won") { g.strokeStyle = "#2EC4B6"; g.lineWidth = 3; g.beginPath(); g.arc(0, 0, body + 9, 0, 2 * Math.PI); g.stroke(); }
+  g.fillStyle = now ? (now.grid ? GRID_COL : (MCOL[now.move] || "#2EC4B6")) : "#2EC4B6";
+  const bw = body * 1.8, bh = body * 1.5, rr = 4;
+  g.beginPath(); g.moveTo(-bw / 2 + rr, -bh / 2); g.lineTo(bw / 2 - rr, -bh / 2); g.quadraticCurveTo(bw / 2, -bh / 2, bw / 2, -bh / 2 + rr);
+  g.lineTo(bw / 2, bh / 2 - rr); g.quadraticCurveTo(bw / 2, bh / 2, bw / 2 - rr, bh / 2); g.lineTo(-bw / 2 + rr, bh / 2);
+  g.quadraticCurveTo(-bw / 2, bh / 2, -bw / 2, bh / 2 - rr); g.lineTo(-bw / 2, -bh / 2 + rr); g.quadraticCurveTo(-bw / 2, -bh / 2, -bw / 2 + rr, -bh / 2); g.fill();
+  g.fillStyle = "#0F1720"; g.beginPath(); g.moveTo(bw / 2 - 2, 0); g.lineTo(bw / 2 - bh * 0.55, -bh * 0.28); g.lineTo(bw / 2 - bh * 0.55, bh * 0.28); g.fill();
+  g.restore();
+  if (over()) {
+    const txt = phase === "won" ? "Finish reached in " + stats.steps + " steps" : phase === "timeout" ? "No finish after " + stats.steps + " steps" : "No route to the finish";
+    g.font = "600 15px system-ui"; const tw = g.measureText(txt).width + 30;
+    g.fillStyle = phase === "won" ? "rgba(46,196,182,0.95)" : "rgba(255,107,107,0.95)"; g.fillRect((W - tw) / 2, 10, tw, 32);
+    g.fillStyle = "#08231F"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(txt, W / 2, 26);
+  }
+  drawTrace();
+}
+function drawTrace() {
+  const W = COLS * px, H = 90, R = D.reward, top = 2.0;
+  tg.clearRect(0, 0, W, H);
+  const y = v => H - 14 - (H - 24) * Math.min(v, top) / top;
+  tg.fillStyle = "rgba(46,196,182,0.14)"; tg.fillRect(34, y(R.target_left + R.tolerance), W - 40, y(R.target_left - R.tolerance) - y(R.target_left + R.tolerance));
+  tg.fillStyle = "#8FA1B3"; tg.font = "10px system-ui"; tg.textAlign = "right"; tg.textBaseline = "middle";
+  [0, 1, 2].forEach(v => tg.fillText(v + " m", 30, y(v)));
+  tg.textAlign = "left"; tg.fillText("left distance (target band shaded) and front distance, last 240 steps", 38, 8);
+  const n = hist.length; if (n < 2) return;
+  const xAt = i => 34 + (W - 40) * i / 239;
+  [[0, "#2EC4B6"], [1, "#5AA9E6"]].forEach(([k, col]) => {
+    tg.strokeStyle = col; tg.lineWidth = 1.6; tg.beginPath();
+    hist.forEach((h, i) => { const X = xAt(i + 240 - n), Y = y(h[k]); if (i) tg.lineTo(X, Y); else tg.moveTo(X, Y); }); tg.stroke();
+  });
+}
+
+// ------------------------------------------------------------------ side panel
+const fx = (v, d) => (v === null || v === undefined || !isFinite(v)) ? "–" : Number(v).toFixed(d);
+function panel() {
+  if (!now || !stats) return;
+  const b = el("banner");
+  if (phase === "won") { b.className = "win"; b.textContent = "Finish reached: " + stats.steps + " steps, " + stats.metres.toFixed(1) + " m, " + stats.bumps + " bumps."; }
+  else if (phase === "timeout") { b.className = "fail"; b.textContent = "Stopped after " + stats.steps + " steps. " + (gridMode() ? "Try less slip." : "The wall-follower only passes finishes near the wall it follows. Move the flag next to a wall, or switch to the goal seeker."); }
+  else if (phase === "blocked") { b.className = "fail"; b.textContent = "The finish is walled off. Erase a wall or move the flag."; }
+  else { b.className = ""; b.textContent = playing ? "Driving… step " + stats.steps : (stats.steps ? "Paused at step " + stats.steps + "." : "Ready. Press Run."); }
+  el("move").textContent = now.move; el("move").style.color = now.grid ? GRID_COL : (MCOL[now.move] || "#E6EDF3");
+  if (now.grid) {
+    const v = (gv && inGrid(now.c, now.r)) ? gv[now.r][now.c] : null;
+    el("stateTxt").innerHTML = "State " + now.label + ". V = " + fx(v, 2) + ", about " + (v === null ? "–" : Math.max(0, -v).toFixed(0)) + " moves to go.";
+  } else {
+    el("stateTxt").innerHTML = "State " + now.label + (now.guessed ? " <span style='color:#FF6B6B'>(closest known state, this exact reading is not in the log)</span>" : "") + ". V* = " + fx(D.value[now.label], 2);
+  }
+  el("dists").innerHTML = Object.keys(ARC).map(k => {
+    const v = now.sc.dist[k], used = D.used.indexOf(k) >= 0, lvl = used ? D.names[k][levelOf(k, v)] : "";
+    return "<div class='bar'><span>" + k.slice(3) + "</span><div class='track'><div class='fill' style='width:" + Math.min(100, v / RANGE * 100).toFixed(1) +
+      "%;background:" + ACOL[k] + "'></div></div><span>" + v.toFixed(2) + " m" + (lvl ? ", " + lvl : "") + "</span></div>";
+  }).join("");
+  let html = "";
+  if (now.grid) {
+    el("qHead").textContent = "Grid MDP action values";
+    if (gv && inGrid(now.c, now.r) && greach[now.r][now.c] && now.m >= 0) {
+      const q = [0, 1, 2, 3].map(m => [gridQ(now.c, now.r, m), m]).sort((a, b) => b[0] - a[0]);
+      const lo = q[3][0], hi = q[0][0];
+      q.forEach(([v, m]) => { html += "<div class='bar'><span>" + GRID_MOVES[m][3] + "</span><div class='track'><div class='fill' style='width:" + (hi > lo ? 10 + 90 * (v - lo) / (hi - lo) : 100).toFixed(0) + "%;background:" + GRID_COL + "'></div></div><span>" + v.toFixed(2) + (m === now.m ? " ★" : "") + "</span></div>"; });
+    } else html = "<span class='muted'>Nothing to rank here.</span>";
+  } else {
+    el("qHead").textContent = "Sensor MDP action values Q(s, a)";
+    const q = D.q[now.label] || [], ok = q.filter(v => v !== null), lo = ok.length ? Math.min.apply(null, ok) : 0, hi = ok.length ? Math.max.apply(null, ok) : 1;
+    MOVES.forEach((m, i) => {
+      const v = q[i], has = v !== null && v !== undefined, star = m === D.best[now.label];
+      html += "<div class='bar'><span style='font-size:11px'>" + D.short_moves[m] + "</span><div class='track'><div class='fill' style='width:" + (has ? (hi > lo ? 10 + 90 * (v - lo) / (hi - lo) : 100) : 0).toFixed(0) +
+        "%;background:" + MCOL[m] + "'></div></div><span>" + (has ? v.toFixed(2) : "not in log") + (star ? " ★" : "") + "</span></div>";
+    });
+  }
+  el("qs").innerHTML = html;
+  el("kv").innerHTML =
+    "<div><b>" + stats.steps + "</b><span>steps</span></div><div><b>" + stats.metres.toFixed(1) + " m</b><span>travelled</span></div>" +
+    "<div><b>" + stats.bumps + "</b><span>bumps</span></div><div><b>" + stats.slips + "</b><span>slipped moves</span></div>" +
+    "<div><b>" + (stats.steps ? (100 * stats.holding / stats.steps).toFixed(0) : 0) + "%</b><span>in target band</span></div>" +
+    "<div><b>" + (stats.steps ? (stats.reward / stats.steps).toFixed(2) : "0.00") + "</b><span>mean reward per step</span></div>";
+}
+
+// ------------------------------------------------------------------ controls
+function restart() {
+  pos = { x: start.c + 0.5, y: start.r + 0.5, a: start.a }; shown = { x: pos.x, y: pos.y };
+  path = []; hist = []; stats = fresh(); phase = "idle"; planGrid(); think(); draw(); panel();
+}
+function loadMap() { empty(); const M = MAPS[el("map").value]; M.make(); start = { c: M.s[0], r: M.s[1], a: M.s[2] }; finish = { c: M.f[0], r: M.f[1] }; restart(); }
+function setPlaying(v) { playing = v; el("go").textContent = v ? "⏸ Pause" : "▶ Run"; }
+el("go").onclick = () => { if (!playing && over()) restart(); setPlaying(!playing); panel(); };
+el("one").onclick = () => { setPlaying(false); advance(); draw(); panel(); };
+el("home").onclick = () => { setPlaying(false); restart(); };
+el("map").onchange = () => { setPlaying(false); loadMap(); };
+el("brain").onchange = () => {
+  if (gridMode()) { pos.x = Math.floor(pos.x) + 0.5; pos.y = Math.floor(pos.y) + 0.5; shown.x = pos.x; shown.y = pos.y; }
+  if (!over()) phase = stats.steps ? "paused" : "idle"; think(); draw(); panel();
+};
+document.querySelectorAll(".seg button").forEach(btn => btn.onclick = () => {
+  tool = btn.dataset.tool; document.querySelectorAll(".seg button").forEach(x => x.classList.toggle("on", x === btn));
+});
+el("turnL").onclick = () => { start.a = (start.a + 90) % 360; if (!stats.steps) restart(); else draw(); };
+el("turnR").onclick = () => { start.a = (start.a + 270) % 360; if (!stats.steps) restart(); else draw(); };
+function slider(id, out, fn, after) { const s = el(id); s.oninput = () => { el(out).textContent = fn(+s.value); if (after) after(); }; el(out).textContent = fn(+s.value); }
+slider("slip", "slipTxt", v => { slip = v / 100; return v + "%"; }, () => { planGrid(); think(); draw(); panel(); });
+slider("noise", "noiseTxt", v => { noise = v / 100; return v + " cm"; });
+slider("stride", "strideTxt", v => { motion.stride = v / 100; return v + " cm"; });
+slider("soft", "softTxt", v => { motion.soft = v; return v + "°"; });
+slider("hard", "hardTxt", v => { motion.hard = v; return v + "°"; });
+["vRays", "vPath", "vPlan"].forEach(id => el(id).onchange = draw);
+
+let paint = null;
+function cellAt(e) { const b = room.getBoundingClientRect(); return [Math.floor((e.clientX - b.left) / px), Math.floor((e.clientY - b.top) / px)]; }
+const inner = (c, r) => c > 0 && r > 0 && c < COLS - 1 && r < ROWS - 1;
+function paintCell(c, r) {
+  if (!inner(c, r)) return;
+  if (paint === 1 && ((c === finish.c && r === finish.r) || (c === start.c && r === start.r) || (c === Math.floor(pos.x) && r === Math.floor(pos.y)))) return;
+  walls[r][c] = paint;
+}
+room.addEventListener("pointerdown", e => {
+  const [c, r] = cellAt(e); if (!inner(c, r)) return;
+  if (tool === "start") { if (!walls[r][c]) { start.c = c; start.r = r; setPlaying(false); restart(); } return; }
+  if (tool === "finish") { if (!walls[r][c]) { finish.c = c; finish.r = r; planGrid(); if (over()) phase = "paused"; think(); draw(); panel(); } return; }
+  paint = walls[r][c] ? 0 : 1; paintCell(c, r);
+  try { room.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  draw();
+});
+room.addEventListener("pointermove", e => { if (paint === null) return; const [c, r] = cellAt(e); paintCell(c, r); draw(); });
+window.addEventListener("pointerup", () => { if (paint !== null) { paint = null; planGrid(); if (phase === "blocked") phase = "paused"; think(); draw(); panel(); } });
+
+el("key").innerHTML = MOVES.map(m => "<span><i style='background:" + MCOL[m] + "'></i>" + m + "</span>").join("") + "<span><i style='background:" + GRID_COL + "'></i>Grid move</span>";
+
+window.__wallbot = { run: n => { let i = 0; while (i < n && !over()) { advance(); i++; } panel(); return { phase: phase, steps: stats.steps, bumps: stats.bumps }; },
+                     visits: () => path.map(p => [Math.floor(p[0]), Math.floor(p[1])]) };
+let acc = 0, last = null;
+function frame(t) {
+  if (last === null) last = t;
+  const dt = Math.min(0.1, (t - last) / 1000); last = t;
+  if (playing) {
+    acc += dt * +el("speed").value * (gridMode() ? 0.4 : 1);
+    let n = 0, moved = false;
+    while (acc >= 1 && n < 40 && playing) { advance(); acc -= 1; n++; moved = true; }
+    if (moved) panel();
+  } else acc = 0;
+  if (flash > 0) flash--;
+  draw(); requestAnimationFrame(frame);
+}
+window.addEventListener("resize", fit);
+loadMap(); fit(); requestAnimationFrame(frame);
+})();
+</script>
+</body></html>

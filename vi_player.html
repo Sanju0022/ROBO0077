@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<style>
+  :root { --bg:#0F1720; --panel:#16212C; --line:#243241; --ink:#E6EDF3; --muted:#8FA1B3; --teal:#2EC4B6; --amber:#FFB347; --coral:#FF6B6B; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 "Inter","Segoe UI",system-ui,sans-serif; }
+  .wrap { display:grid; grid-template-columns:minmax(320px, 1fr) 340px; gap:14px; padding:6px; }
+  @media (max-width: 900px) { .wrap { grid-template-columns:1fr; } }
+  .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px; }
+  button, select { font:inherit; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 11px; cursor:pointer; }
+  button:hover { border-color:var(--teal); }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline:2px solid var(--teal); outline-offset:1px; }
+  .go { background:var(--teal); color:#08231F; border-color:var(--teal); font-weight:700; min-width:92px; }
+  input[type=range] { flex:1; min-width:140px; accent-color:var(--teal); }
+  .stats { display:flex; gap:22px; margin-bottom:8px; flex-wrap:wrap; }
+  .stats div span { display:block; color:var(--muted); font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; }
+  .stats div b { font-size:22px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:10px; }
+  .card h5 { margin:0 0 6px; font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+  #bars { cursor:pointer; display:block; }
+  .code { font:12.5px/1.6 "JetBrains Mono","Fira Code",Consolas,monospace; }
+  .code div { padding:0 6px; border-radius:4px; white-space:pre-wrap; color:#B8C4D0; }
+  .code div.on { background:#1F3A44; color:var(--teal); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { text-align:left; padding:4px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  tr.best td { color:var(--teal); font-weight:700; }
+  .muted { color:var(--muted); font-size:12.5px; }
+  .key { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:var(--muted); margin:6px 0; }
+  .key i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+  #tip { position:fixed; pointer-events:none; background:#000C; color:#fff; padding:5px 8px; border-radius:6px; font-size:12px; display:none; }
+</style></head>
+<body>
+<div class="wrap">
+  <div>
+    <div class="stats">
+      <div><span>Sweep k</span><b id="k">0</b></div>
+      <div><span>Largest change Δ</span><b id="d">–</b></div>
+      <div><span>Greedy moves changed</span><b id="ch">–</b></div>
+      <div><span>States</span><b id="ns">–</b></div>
+    </div>
+    <div class="row">
+      <button id="first" aria-label="First sweep">⏮</button>
+      <button id="back" aria-label="Previous sweep">◀</button>
+      <button id="play" class="go">▶ Play</button>
+      <button id="fwd" aria-label="Next sweep">▶</button>
+      <button id="last" aria-label="Last sweep">⏭</button>
+      <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Sweep">
+      <select id="rate" aria-label="Speed"><option value="3">Slow</option><option value="8" selected>Normal</option><option value="20">Fast</option></select>
+    </div>
+    <div class="key" id="key"></div>
+    <canvas id="bars"></canvas>
+    <div class="muted" style="margin-top:6px">Each bar is one state, sorted by its final value V*. The bar is V<sub>k</sub>, the white tick is where it ends up, the colour is the best move at this sweep. Click a bar for its Bellman update.</div>
+    <div class="card" style="margin-top:10px"><h5>Δ per sweep (log scale)</h5><canvas id="conv"></canvas></div>
+  </div>
+  <div>
+    <div class="card"><h5>Algorithm</h5><div class="code" id="code"></div></div>
+    <div class="card"><h5 id="bt">Bellman update</h5><div id="bb"></div></div>
+  </div>
+</div>
+<div id="tip"></div>
+<script>
+(function () {
+"use strict";
+const D = /*__DATA__*/null;
+const el = id => document.getElementById(id);
+const S = D.states.length, A = D.moves.length, F = D.frames;
+let fi = 0, playing = false, pick = D.order[0], pulse = 0, rects = [];
+el("scrub").max = F.length - 1; el("ns").textContent = S;
+el("key").innerHTML = D.moves.map(m => "<span><i style='background:" + D.move_colors[m] + "'></i>" + m + "</span>").join("");
+
+function qRow(s, V) {
+  const q = new Array(A).fill(null);
+  for (let a = 0; a < A; a++) { if (!D.seen[s][a]) continue; let e = 0; for (const [t, p] of D.P[s][a]) e += p * V[t]; q[a] = D.R[s][a] + D.gamma * e; }
+  return q;
+}
+function greedy(V) { const pi = []; for (let s = 0; s < S; s++) { const q = qRow(s, V); let b = -1, bv = -Infinity; q.forEach((v, a) => { if (v !== null && v > bv) { bv = v; b = a; } }); pi.push(b); } return pi; }
+const PI = F.map(f => greedy(f.V));
+
+const cv = el("bars"), g = cv.getContext("2d");
+function drawBars() {
+  const w = Math.max(300, cv.parentElement.clientWidth), dpr = window.devicePixelRatio || 1;
+  const bh = Math.max(4, Math.min(20, Math.floor(620 / S))), gap = bh > 8 ? 3 : 1;
+  g.font = "11px system-ui";
+  const widest = D.states.reduce((m, s) => Math.max(m, g.measureText(s).width), 0);
+  const label = bh >= 12 ? Math.min(Math.ceil(widest) + 10, Math.floor(w * 0.45)) : 8;
+  const h = S * (bh + gap) + 24;
+  cv.width = w * dpr; cv.height = h * dpr; cv.style.width = w + "px"; cv.style.height = h + "px"; g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const x0 = label + 6, x1 = w - 50, lo = D.vmin, hi = D.vmax;
+  const X = v => x0 + (x1 - x0) * (v - lo) / (hi - lo || 1), zero = X(0);
+  g.strokeStyle = "#243241"; g.lineWidth = 1; g.beginPath(); g.moveTo(zero, 0); g.lineTo(zero, h - 20); g.stroke();
+  g.fillStyle = "#8FA1B3"; g.font = "10px system-ui"; g.textAlign = "center";
+  [lo, 0, hi].forEach(v => g.fillText(v.toFixed(1), X(v), h - 6));
+  const V = F[fi].V, pi = PI[fi], prev = fi ? PI[fi - 1] : null;
+  rects = [];
+  D.order.forEach((s, row) => {
+    const y = row * (bh + gap);
+    if (s === pick) { g.fillStyle = "rgba(46,196,182,0.12)"; g.fillRect(0, y - 1, w, bh + 2); }
+    if (label > 8) { g.fillStyle = s === pick ? "#2EC4B6" : "#B8C4D0"; g.font = "11px system-ui"; g.textAlign = "right"; g.textBaseline = "middle"; g.fillText(D.states[s], label, y + bh / 2); }
+    const xa = Math.min(zero, X(V[s])), xb = Math.max(zero, X(V[s]));
+    g.fillStyle = pi[s] >= 0 ? D.move_colors[D.moves[pi[s]]] : "#555"; g.globalAlpha = 0.9; g.fillRect(xa, y, Math.max(1, xb - xa), bh); g.globalAlpha = 1;
+    if (prev && prev[s] !== pi[s]) { g.strokeStyle = "#FFFFFF"; g.lineWidth = 1.5; g.strokeRect(xa + 0.5, y + 0.5, Math.max(1, xb - xa) - 1, bh - 1); }
+    g.fillStyle = "#FFFFFF"; g.fillRect(X(D.final[s]) - 1, y - 1, 2, bh + 2);
+    rects.push([y, y + bh + gap, s]);
+  });
+}
+const cc = el("conv"), c2 = cc.getContext("2d");
+function drawConv() {
+  const w = Math.max(280, cc.parentElement.clientWidth - 24), h = 130, dpr = window.devicePixelRatio || 1;
+  cc.width = w * dpr; cc.height = h * dpr; cc.style.width = w + "px"; cc.style.height = h + "px"; c2.setTransform(dpr, 0, 0, dpr, 0, 0); c2.clearRect(0, 0, w, h);
+  if (!D.conv.length) return;
+  const L = 44, Rm = 8, T = 6, B = 18, n = Math.max(2, D.sweeps);
+  const logs = D.conv.map(p => Math.log10(Math.max(p[1], 1e-14))).concat([Math.log10(D.tol)]);
+  const ymin = Math.min.apply(null, logs), ymax = Math.max.apply(null, logs);
+  const X = k => L + (w - L - Rm) * (k - 1) / (n - 1), Y = v => T + (h - T - B) * (ymax - Math.log10(Math.max(v, 1e-14))) / (ymax - ymin || 1);
+  c2.fillStyle = "#8FA1B3"; c2.font = "10px system-ui"; c2.textAlign = "right"; c2.textBaseline = "middle";
+  for (let e = Math.ceil(ymin); e <= Math.floor(ymax); e += Math.max(1, Math.round((ymax - ymin) / 5))) { const y = Y(Math.pow(10, e)); c2.fillText("1e" + e, L - 4, y); c2.strokeStyle = "#1C2A37"; c2.beginPath(); c2.moveTo(L, y); c2.lineTo(w - Rm, y); c2.stroke(); }
+  c2.setLineDash([4, 4]); c2.strokeStyle = "#FF6B6B"; c2.beginPath(); c2.moveTo(L, Y(D.tol)); c2.lineTo(w - Rm, Y(D.tol)); c2.stroke(); c2.setLineDash([]);
+  c2.strokeStyle = "#2EC4B6"; c2.lineWidth = 2; c2.beginPath(); D.conv.forEach((p, i) => { const x = X(p[0]), y = Y(p[1]); if (i) c2.lineTo(x, y); else c2.moveTo(x, y); }); c2.stroke();
+  const f = F[fi]; if (f.k > 0) { c2.fillStyle = "#FFB347"; c2.beginPath(); c2.arc(X(f.k), Y(f.d), 5, 0, 7); c2.fill(); }
+  c2.textAlign = "center"; c2.fillStyle = "#8FA1B3"; c2.fillText("1", L, h - 6); c2.fillText(String(D.sweeps), w - Rm, h - 6);
+}
+const CODE = ["V(s) = 0 for every state", "repeat (sweep k = 1, 2, ...):", "  for each state s:", "    for each action a seen in s:",
+              "      Q[a] = R[s][a] + γ · Σ P[s][a][s'] · V[s']", "    V_new[s] = max(Q)", "  Δ = max |V_new − V|;  V = V_new",
+              "until Δ < θ    (θ = " + D.tol.toExponential(0) + ", γ = " + D.gamma + ")", "π*(s) = argmax Q"];
+function drawCode() {
+  const f = F[fi], last = fi === F.length - 1;
+  const on = f.k === 0 ? [0] : (last && D.converged ? [7, 8] : (playing ? [[2, 3, 4], [5], [6]][pulse % 3] : [2, 3, 4, 5, 6]));
+  el("code").innerHTML = CODE.map((l, i) => "<div class='" + (on.includes(i) ? "on" : "") + "'>" + l.replace(/</g, "&lt;") + "</div>").join("");
+}
+const fx = (v, d) => v === null || !isFinite(v) ? "–" : Number(v).toFixed(d);
+function drawBellman() {
+  const f = F[fi], V = f.V, q = qRow(pick, V);
+  let b = -1, bv = -Infinity; q.forEach((v, a) => { if (v !== null && v > bv) { bv = v; b = a; } });
+  el("bt").textContent = "Bellman update for " + D.states[pick];
+  let h = "<div class='muted'>Uses V<sub>" + f.k + "</sub> to produce V<sub>" + (f.k + 1) + "</sub>. Now V<sub>" + f.k + "</sub>(s) = " + fx(V[pick], 3) + ", visited " + D.visits[pick] + " times in the log.</div>";
+  h += "<table><tr><th>Move</th><th>R</th><th>γ · Σ P·V (top 3)</th><th>Q</th></tr>";
+  D.moves.forEach((m, a) => {
+    if (!D.seen[pick][a]) { h += "<tr><td style='color:#5D6D7E'>" + D.short_moves[m] + "</td><td colspan=3 class='muted'>never taken here in the log</td></tr>"; return; }
+    const top = D.P[pick][a].slice().sort((x, y) => y[1] - x[1]);
+    const txt = top.slice(0, 3).map(([t, p]) => p.toFixed(2) + "×" + V[t].toFixed(1)).join(" + ") + (top.length > 3 ? " + …" : "");
+    h += "<tr class='" + (a === b ? "best" : "") + "'><td><span style='color:" + D.move_colors[m] + "'>■</span> " + D.short_moves[m] + (a === b ? " ★" : "") + "</td><td>" + fx(D.R[pick][a], 2) + "</td><td>" + txt + "</td><td>" + fx(q[a], 2) + "</td></tr>";
+  });
+  h += "</table><div style='margin-top:6px'>V<sub>" + (f.k + 1) + "</sub>(s) = <b>" + fx(bv, 3) + "</b>" + (b >= 0 ? ", best move <b style='color:" + D.move_colors[D.moves[b]] + "'>" + D.moves[b] + "</b>" : "") + ". Final V* = " + fx(D.final[pick], 3) + "</div>";
+  el("bb").innerHTML = h;
+}
+function render() {
+  const f = F[fi];
+  el("k").textContent = f.k; el("d").textContent = f.k ? f.d.toExponential(2) : "–";
+  el("ch").textContent = fi ? String(PI[fi].reduce((n, a, s) => n + (a !== PI[fi - 1][s] ? 1 : 0), 0)) : "–";
+  el("scrub").value = fi; drawBars(); drawConv(); drawCode(); drawBellman();
+}
+function setPlay(v) { playing = v; el("play").textContent = v ? "⏸ Pause" : "▶ Play"; }
+el("play").onclick = () => { if (!playing && fi === F.length - 1) fi = 0; setPlay(!playing); render(); };
+el("first").onclick = () => { setPlay(false); fi = 0; render(); };
+el("last").onclick = () => { setPlay(false); fi = F.length - 1; render(); };
+el("back").onclick = () => { setPlay(false); fi = Math.max(0, fi - 1); render(); };
+el("fwd").onclick = () => { setPlay(false); fi = Math.min(F.length - 1, fi + 1); render(); };
+el("scrub").oninput = e => { setPlay(false); fi = +e.target.value; render(); };
+function rowAt(e) { const r = cv.getBoundingClientRect(), y = e.clientY - r.top; const hit = rects.find(q => y >= q[0] && y < q[1]); return hit ? hit[2] : null; }
+cv.addEventListener("click", e => { const s = rowAt(e); if (s !== null) { pick = s; render(); } });
+cv.addEventListener("mousemove", e => {
+  const s = rowAt(e), tip = el("tip"); if (s === null) { tip.style.display = "none"; return; }
+  const a = PI[fi][s]; tip.innerHTML = D.states[s] + "<br>V<sub>" + F[fi].k + "</sub> = " + F[fi].V[s].toFixed(3) + (a >= 0 ? "<br>best: " + D.moves[a] : "");
+  tip.style.left = e.clientX + 12 + "px"; tip.style.top = e.clientY + 12 + "px"; tip.style.display = "block";
+});
+cv.addEventListener("mouseleave", () => el("tip").style.display = "none");
+let acc = 0, last = null;
+function tick(t) {
+  if (last === null) last = t; const dt = Math.min(0.1, (t - last) / 1000); last = t;
+  if (playing) { acc += dt * +el("rate").value; if (acc >= 1) { acc = 0; pulse++; if (fi < F.length - 1) fi++; else setPlay(false); render(); } }
+  requestAnimationFrame(tick);
+}
+window.addEventListener("resize", render);
+render(); requestAnimationFrame(tick);
+})();
+</script>
+</body></html>
